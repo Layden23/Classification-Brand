@@ -1,0 +1,304 @@
+---
+title: "Customer Brand Preferences Report"
+author: "Joël Ribera Zaragoza"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    toc_depth: 3
+    toc_float: true
+    collapsed: false
+    smooth_scroll: false
+    lightbox: true
+---
+
+
+```{r knitr_init, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=T,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+## Introduction
+
+Our main objective in this report is to predict the brand of a incomplete survey of 5000 costumers. We will predict the prefered brand of this incomplete survey based on the features of a complete survey of 10000 costumers. On a first approach, we are going to see if our costumers profiles are similar in both survey (complete and incomplete) to see if our model can replicate. 
+
+Then, we'll try several models for resolving classifications problems, suchs as k-NN, svmLinear (linear support vector machine), logistic regression and decision tree models like random forests, gradient boosted trees and c5.0
+
+We'll choose the model with the best accuracy, that's to say, the one who predicts more samples correctly and then we'll use it on our incomplete survey.
+
+## Data exploration and preprocessing
+The first step is to clean the data and look for patterns and relations between our attributes.
+
+```{r }
+library(caret)
+library(readr)
+library(ggplot2)
+library(arules)
+library(Metrics)
+library(textclean)
+library(corrplot)
+
+#First we import our data:
+setwd("..")
+compl_responses <- read_csv("./Datasets/CompleteResponses.csv")
+incompl_responses <- read_csv("./Datasets/SurveyIncomplete.csv")
+set.seed(203)
+#Looking for outliers.
+boxplot(compl_responses[,c("salary","credit")])
+boxplot(compl_responses[,c("age")])
+boxplot(compl_responses[,c( "elevel", "car", "zipcode")])
+#There are no outliers.
+#Let's look for missing values.
+any(is.na(compl_responses))
+#There are no missing values.
+#Let's plot the correlation matrix to see if there is any correlation between te features
+#Correlation matrix:
+corrplot(round(digits = 2 , cor(compl_responses[,c(1,2,6)], method = c("pearson", "kendall", "spearman"))))
+
+```
+
+There are no missing values and there aren't any outliers. Furthermore,there are no correlations between the numeric variables.
+
+First we are going to rename our values to make them more readable and understandable.
+
+```{r pre-processing}
+#Renaming our features
+## For the complete
+compl_responses$elevel <- as.factor(compl_responses$elevel)
+compl_responses$elevel <- mgsub(pattern = c(0,1,2,3,4), replacement = c("Less than HS","HS","College","Degree","Master's, Doc, others"), 
+                                x = compl_responses$elevel)
+compl_responses$car <- as.factor(compl_responses$car)
+compl_responses$car <- mgsub(x = compl_responses$car, pattern = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20), replacement = c("BMW","Buick","Cadillac", "Chevrolet","Chrysler", "Dodge", "Ford","Honda","Hyundai","Jeep","Kia","Lincoln","Mazda","Mercedes Benz", "Mitsubishi","Nissan", "Ram", "Subaru", "Toyota","None of the above"))
+compl_responses$zipcode <- as.factor(compl_responses$zipcode)
+compl_responses$zipcode <- mgsub(x = compl_responses$zipcode, pattern = c(0,1,2,3,4,5,6,7,8), replacement = c("New England","Mid-Atlantic","East North Central","West North Central","South Atlantic","East South Central","West South Central","Mountain", "Pacific"))
+compl_responses$brand <- mgsub(pattern = c(0,1) , replacement = c("Acer","Sony"),
+                               x = compl_responses$brand)
+compl_responses$brand <- as.factor(compl_responses$brand)
+
+```
+
+```{r}
+## For the incomplete
+incompl_responses$elevel <- as.factor(incompl_responses$elevel)
+incompl_responses$elevel <- mgsub(pattern = c(0,1,2,3,4), replacement = c("Less than HS","HS","College","Degree","Master's, Doc, others"), 
+                                x = incompl_responses$elevel)
+incompl_responses$car <- as.factor(incompl_responses$car)
+incompl_responses$car <- mgsub(x = incompl_responses$car, pattern = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20), replacement = c("BMW","Buick","Cadillac", "Chevrolet","Chrysler", "Dodge", "Ford","Honda","Hyundai","Jeep","Kia","Lincoln","Mazda","Mercedes Benz", "Mitsubishi","Nissan", "Ram", "Subaru", "Toyota","None of the above"))
+incompl_responses$zipcode <- as.factor(incompl_responses$zipcode)
+incompl_responses$zipcode <- mgsub(x = incompl_responses$zipcode, pattern = c(0,1,2,3,4,5,6,7,8), replacement = c("New England","Mid-Atlantic","East North Central","West North Central","South Atlantic","East South Central","West South Central","Mountain", "Pacific"))
+incompl_responses$brand <- mgsub(pattern = c(0,1) , replacement = c("Acer","Sony"),
+                               x = incompl_responses$brand)
+incompl_responses$brand <- as.factor(incompl_responses$brand)
+```
+
+We are going to discretize the variables of our model to obtain certain knowledge and information about the patterns and trends of the costumers.
+
+```{r}
+## Here I store the complete responses and incomplete responses without discretizing, because we'll use this datasets for our models.
+complete_responses <- compl_responses
+incomplete_responses <- incompl_responses
+#Discretizing
+compl_responses$salary <- discretize(compl_responses$salary,
+                            method = "interval",
+                            breaks = 5)
+incompl_responses$salary <- discretize(incompl_responses$salary,
+                            method = "interval",5)
+compl_responses$age <- discretize(compl_responses$age, "interval",6)
+incompl_responses$age <- discretize(incompl_responses$age,
+                            method = "interval",
+                            breaks = 6)
+compl_responses$credit <- discretize(compl_responses$credit,
+                            method = "interval",5)
+incompl_responses$credit <- discretize(incompl_responses$credit,
+                            method = "interval",5)
+```
+
+```{r}
+compl_responses$state <- "complete"
+incompl_responses$state <- "incomplete"
+
+whole_responses <- rbind(compl_responses,incompl_responses)
+```
+
+Here, we are going to see if the distribution of the completed survey and the incompleted survey are similar.
+
+```{r loop try}
+for (i in c("salary","age","elevel","car","zipcode","credit")) {
+    print(ggplot(data = whole_responses, aes_string(i, fill="state")) + 
+      geom_bar(alpha = 0.5, position = "identity"))
+}
+```
+
+We can see, the distributions in both datasets are quite similar, which means that a model based on the complete survey used in the incomplete survey should be consistent. Now let's take a look into the completed survey data. 
+
+```{r}
+#Histogram for the distributions for each feature and brand.
+ggplot(data = compl_responses, mapping = aes(x = salary, 
+                                             fill = brand)) + 
+  geom_bar(alpha  = 0.5 , position = "identity", color = "black",
+                 bins = 20, ) 
+ggplot(data = compl_responses, mapping = aes(x = age, 
+                                             fill = brand)) + 
+  geom_bar(alpha  = 0.5 , position = "identity",
+                 color = "black",
+                 bins = 20) 
+ggplot(data = compl_responses, mapping = aes(x = elevel, 
+                                             fill = brand)) + 
+  geom_bar(alpha  = 0.5 , position = "identity", color = "black",
+                 bins = 20) 
+ggplot(data = compl_responses, mapping = aes(x = car, 
+                                             fill = brand)) + 
+  geom_bar(alpha  = 0.5 , position = "identity", color = "black",
+                 bins = 20) +
+  theme(axis.text.x = element_text(angle=60, hjust=1))
+ggplot(data = compl_responses, mapping = aes(x = zipcode, 
+                                             fill = brand)) + 
+  geom_bar(alpha  = 0.5 , position = "identity", color = "black",
+                 bins = 20) +
+  theme(axis.text.x = element_text(angle=60, hjust=1)) 
+  
+ggplot(data = compl_responses, mapping = aes(x = credit, 
+                                             fill = brand)) + 
+  geom_bar(alpha  = 0.5 , position = "identity", color = "black",
+                 bins = 20)
+```
+In these charts, we can observe that this survey was stratified, as every group in each feature is represented equally.
+```{r}
+#Scatterplot between the variables:
+ggplot(data = compl_responses, mapping = aes(x = age, y = credit, 
+                                             color = brand)) + 
+  geom_jitter()
+#Scatterplot 
+ggplot(data = compl_responses, mapping = aes(x = credit, y = salary, color = brand)) + 
+  geom_jitter()
+
+ggplot(data = compl_responses, mapping = aes(x = age, y = salary, 
+                                             color = brand)) + 
+  geom_jitter() + geom_smooth()
+
+```
+
+We can observe a clear pattern in the age vs salary scatterplot. Costumers between 20 and 40 years old who have a salary between 46k and 98k tend to buy Acer, and the rest Sony. Those who are between 40 and 60 years old and have a salary between 72k and 124k are also more likely to buy Acer. Finally, those costumers whose age is between 60 and 80 years tendre to buy Acer if their salary is between 20k and 72k.
+## Feauture Engineering
+
+```{r}
+training_index <- createDataPartition(y = complete_responses$brand, p =  0.75, list = FALSE)
+trainSet <- complete_responses[training_index, ]
+testSet <- complete_responses[-training_index, ]
+```
+
+
+We'll run a gbm model to see the influence of each variable we've got, and then do the feature selection.
+
+```{r}
+fitControl <- trainControl(
+                           method = "repeatedcv",
+                           number = 10,
+                           repeats = 3)
+gbm_model <- train(brand ~., data = trainSet, method = "gbm", 
+                    trControl = fitControl, tuneLength = 2,
+                 ## This last option is actually one
+                 ## for gbm() that passes through
+                 verbose = FALSE)
+
+```
+
+```{r}
+summary(gbm_model)
+```
+
+We've seen using the GBM method that the features that have the highest impact are salary and age.
+We are going to standarize all the numeric values, because we are going to try models as SVM that are based on distances.
+
+```{r standarize}
+#Standarization of numeric variables
+for (i in c(1,2,6)) {
+  compl_responses[,i] <- scale(complete_responses[,i])
+}
+
+for (i in c(1,2,6)) {
+  incompl_responses[,i] <- scale(incomplete_responses[,i])
+}
+```
+
+```{r selecting features}
+sel_compl_responses <- compl_responses[, c(1,2,7)]
+#We build the new train and test sets.
+training_index <- createDataPartition(y = sel_compl_responses$brand, p =  0.75, list = FALSE)
+strainSet <- sel_compl_responses[training_index, ]
+stestSet<- sel_compl_responses[-training_index, ]
+strainSet$brand <- as.factor(strainSet$brand)
+```
+
+## Modeling
+Now we'll try the gradient boosted machines, knn, random forest, support vector machine (svm), logistic regresion and the c5.0 models. 
+
+```{r}
+model <- list()
+model$gbm <- train(brand ~., data = strainSet, method = "gbm", verbose = F 
+                  )
+models <- c("gbm","knn","rf","C5.0","svmLinear","glm")
+for (i in models[-1]) {
+  model[[i]] <- train(brand ~., data = strainSet, method = i
+                  )
+  
+}
+```
+
+Here we store the models and its acurracy in a new data set.
+
+```{r}
+models <- as.data.frame(models)
+accuracy <-vector()
+for (i in c(1,2,3,4,5,6)) {
+  models$accuracy[i]<- round(max(model[[i]]$results$Accuracy),3)
+}
+models
+```
+
+Here we can observe that the best accuracy is provided by the gbm model. The knn, random forest and c5.0 are the models whith the highest accuracy, while the svm and the logistic regression have the lowest accuracy.
+
+Now we are going to make try of the gbm model on the test set to see its performance. 
+
+```{r}
+stestSet$brand <- as.factor(stestSet$brand)
+testpred <- predict(model$gbm, stestSet)
+stestSet$prediction <- testpred
+confu_matrix <- confusionMatrix(data = stestSet$prediction, 
+                                reference = stestSet$brand)
+confu_matrix$table
+confu_matrix$overall
+predicted_responses <- incompl_responses
+predicted_responses$brand <- predict(model$gbm, predicted_responses)
+```
+
+
+## Results Interpretations
+
+```{r}
+ggplot(compl_responses, aes(x="",fill=brand)) + geom_bar() + coord_polar(theta="y") + ggtitle("Complete Survey")
+
+ggplot(predicted_responses, aes(x="",fill=brand)) + geom_bar() + coord_polar(theta="y") + ggtitle("Incomplete Survey")
+
+ggplot(rbind(compl_responses,predicted_responses), aes(x="",fill=brand)) + geom_bar() + coord_polar(theta="y") + ggtitle("Total Survey")
+
+```
+
+We can observe that distribution of Acer and Sony are very similar in the complete survey and in the incomplete survey. This was expected as the profile of the costumers and its distribution areve very similar,almost equal. So the total survey show us that the prefered brand for our costumers is Sony, as it was expected
+
+<!-- begin wwww.htmlcommentbox.com -->
+<div id="HCB_comment_box"><a href="http://www.htmlcommentbox.com">Comment Box</a> is loading comments...</div>
+<link rel="stylesheet" type="text/css" href="https://www.htmlcommentbox.com/static/skins/bootstrap/twitter-bootstrap.css?v=0" />
+<script type="text/javascript" id="hcb"> /*<!--*/ if(!window.hcb_user){hcb_user={};} (function(){var s=document.createElement("script"), l=hcb_user.PAGE || (""+window.location).replace(/'/g,"%27"), h="https://www.htmlcommentbox.com";s.setAttribute("type","text/javascript");s.setAttribute("src", h+"/jread?page="+encodeURIComponent(l).replace("+","%2B")+"&mod=%241%24wq1rdBcg%24QU9x23GQcVLZySCO.uLVx."+"&opts=16862&num=10&ts=1563265318041");if (typeof s!="undefined") document.getElementsByTagName("head")[0].appendChild(s);})(); /*-->*/ </script>
+<!-- end www.htmlcommentbox.com -->

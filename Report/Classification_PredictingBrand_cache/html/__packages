@@ -1,0 +1,12 @@
+base
+knitr
+rmdformats
+lattice
+ggplot2
+caret
+readr
+Matrix
+arules
+Metrics
+textclean
+corrplot
