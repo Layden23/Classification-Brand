@@ -1,4 +1,4 @@
----
+ ---
 title: "Customer Brand Preferences Report"
 author: "Joël Ribera Zaragoza"
 date: "`r Sys.Date()`"
@@ -281,6 +281,7 @@ confu_matrix$table
 confu_matrix$overall
 predicted_responses <- incompl_responses
 predicted_responses$brand <- predict(model$gbm, predicted_responses)
+summary(predicted_responses$brand)
 ```
 
 
@@ -290,6 +291,10 @@ predicted_responses$brand <- predict(model$gbm, predicted_responses)
 ggplot(compl_responses, aes(x="",fill=brand)) + geom_bar() + coord_polar(theta="y") + ggtitle("Complete Survey")
 
 ggplot(predicted_responses, aes(x="",fill=brand)) + geom_bar() + coord_polar(theta="y") + ggtitle("Incomplete Survey")
+
+final <- rbind(compl_responses,predicted_responses)
+
+summary(final$brand)
 
 ggplot(rbind(compl_responses,predicted_responses), aes(x="",fill=brand)) + geom_bar() + coord_polar(theta="y") + ggtitle("Total Survey")
 
